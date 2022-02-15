@@ -1,0 +1,75 @@
+name: Docker coredns
+concurrency: 
+  group: docker-coredns-${{ github.head_ref }}
+
+on:
+  workflow_dispatch:  # Allow manual triggers
+    inputs:
+      tags:
+        description: 'CoreDNS Version'
+        required: false
+      version:
+        description: 'openEuler Version'
+        required: false
+  push:
+    # Publish `main` as Docker `latest` image.
+    branches:
+      - main
+
+    # Publish `v1.2.3` tags as releases.
+    tags:
+      - v*
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@master
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@master
+
+      - name: Log into Docker Hub
+        run: echo ${{ secrets.DOCKERHUB_PW }} | docker login $SITE -u ${{ secrets.DOCKERHUB_UN }} --password-stdin
+
+      - name: Build coredns-openeuler image and Push to Docker Hub
+        run: |
+          IMAGE_ID=${{ secrets.DOCKERHUB_UN }}/coredns-openeuler
+          if [ -z "${{ github.event.inputs.tags }}" ]
+          then
+            # Strip git ref prefix from version
+            TAG=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+            # Strip "v" prefix from tag name
+            [[ "${{ github.ref }}" == "refs/tags/"* ]] && TAG=$(echo $TAG | sed -e 's/^v//')
+            # Use Docker `latest` tag convention
+            [ "$TAG" == "main" ] && TAG=latest
+          else
+            TAG=${{ github.event.inputs.tags }} && TAG=$(echo $TAG | sed -e 's/^v//')
+          fi
+          if [ -z "${{ github.event.inputs.version }}" ]
+          then
+            BASE="21.09"
+          else
+            BASE=${{ github.event.inputs.version }} && BASE=$(echo $BASE | sed -e 's/^v//')
+          fi
+          if [ "latest" = "${TAG}" ]
+          then
+            if wget -O "/tmp/version" "https://api.github.com/repos/coredns/coredns/releases/latest"; then
+              VERSION=`cat /tmp/version |  grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'`
+              VERSION=$(echo $VERSION | sed -e 's/^v//')
+            else
+              VERSION="1.9.0";
+            fi
+          else
+            VERSION=$TAG
+            TAG=${TAG}-${BASE}
+          fi;
+          echo IMAGE=$IMAGE_ID:${TAG}
+          echo BASE=${BASE}
+          echo VERSION=${VERSION}
+          docker buildx build -t $IMAGE_ID:${TAG} --build-arg BASE=${BASE} --build-arg VERSION=${VERSION} --platform linux/amd64,linux/arm64 . --push
